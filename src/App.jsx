@@ -38,12 +38,12 @@ export default function App() {
   }, []);
 
   const visibleVessels = vessels.filter((v) => {
-    if (mapBounds && !mapBounds.contains([v.lat, v.lon])) return false;
     if (query) {
       const q = query.toLowerCase();
       const haystack = `${v.name} ${v.destination} ${v.mmsi} ${v.callSign}`.toLowerCase();
-      if (!haystack.includes(q)) return false;
+      return haystack.includes(q);
     }
+    if (mapBounds && !mapBounds.contains([v.lat, v.lon])) return false;
     return true;
   });
 
