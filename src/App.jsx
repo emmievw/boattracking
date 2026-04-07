@@ -1,231 +1,159 @@
-import { useState } from 'react';
-import { vessels } from './data/vessels';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import VesselMap from './VesselMap';
+import VesselDetail from './VesselDetail';
+import { fetchAllData, getNavLabel, getNavColor, formatSpeed } from './api';
 
-const now = new Date('2026-04-07T12:00:00');
-
-const formatDateTime = (value) =>
-  new Intl.DateTimeFormat('nl-NL', {
-    weekday: 'short',
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value));
-
-const formatRelative = (value) => {
-  const diffMs = new Date(value).getTime() - now.getTime();
-  const diffHours = Math.round(diffMs / 36e5);
-
-  if (diffHours === 0) {
-    return 'Binnen een uur';
-  }
-
-  if (diffHours > 0) {
-    return `Over ${diffHours} uur`;
-  }
-
-  return `${Math.abs(diffHours)} uur geleden`;
-};
-
-const statusTone = {
-  Onderweg: 'tone-blue',
-  Vertraagd: 'tone-red',
-  Aangemeerd: 'tone-green',
-  'Voor anker': 'tone-amber',
-};
-
-function App() {
+export default function App() {
+  const [vessels, setVessels] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('Alle');
+  const [selectedVessel, setSelectedVessel] = useState(null);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [mapBounds, setMapBounds] = useState(null);
+  const intervalRef = useRef(null);
 
-  const filteredVessels = vessels
-    .filter((vessel) => {
-      if (statusFilter === 'Alle') {
-        return true;
+  const loadData = useCallback(async () => {
+    try {
+      setError(null);
+      const data = await fetchAllData();
+      setVessels(data);
+      setLastUpdate(new Date());
+
+      if (selectedVessel) {
+        const updated = data.find((v) => v.mmsi === selectedVessel.mmsi);
+        if (updated) setSelectedVessel(updated);
       }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedVessel?.mmsi]);
 
-      return vessel.status === statusFilter;
-    })
-    .filter((vessel) => {
-      const haystack = `${vessel.name} ${vessel.destination} ${vessel.origin} ${vessel.cargo}`.toLowerCase();
-      return haystack.includes(query.toLowerCase());
-    })
-    .sort((left, right) => new Date(left.eta) - new Date(right.eta));
+  useEffect(() => {
+    loadData();
+    intervalRef.current = setInterval(loadData, 60000);
+    return () => clearInterval(intervalRef.current);
+  }, []);
 
-  const nextArrival = [...vessels]
-    .filter((vessel) => new Date(vessel.eta) > now)
-    .sort((left, right) => new Date(left.eta) - new Date(right.eta))[0];
+  const visibleVessels = vessels.filter((v) => {
+    if (mapBounds && !mapBounds.contains([v.lat, v.lon])) return false;
+    if (query) {
+      const q = query.toLowerCase();
+      const haystack = `${v.name} ${v.destination} ${v.mmsi} ${v.callSign}`.toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    return true;
+  });
 
-  const activeVoyages = vessels.filter((vessel) => vessel.status === 'Onderweg').length;
-  const delayedVoyages = vessels.filter((vessel) => vessel.delayMinutes > 30).length;
-  const berthedVoyages = vessels.filter((vessel) => vessel.status === 'Aangemeerd').length;
-  const averageDelay = Math.round(
-    vessels.reduce((total, vessel) => total + vessel.delayMinutes, 0) / vessels.length
-  );
+  const listVessels = visibleVessels.slice(0, 200);
+
+  const totalVisible = visibleVessels.length;
+  const underway = visibleVessels.filter((v) => v.navStat === 0 || v.navStat === 8).length;
+  const anchored = visibleVessels.filter((v) => v.navStat === 1).length;
+  const moored = visibleVessels.filter((v) => v.navStat === 5).length;
+  const avgSpeed =
+    visibleVessels.length > 0
+      ? (
+          visibleVessels.reduce((sum, v) => sum + (v.sog != null && v.sog < 1023 ? v.sog / 10 : 0), 0) /
+          visibleVessels.length
+        ).toFixed(1)
+      : '0.0';
 
   return (
     <div className="app-shell">
-      <div className="background-orb orb-left" />
-      <div className="background-orb orb-right" />
+      <VesselMap
+        vessels={vessels}
+        selectedVessel={selectedVessel}
+        onSelectVessel={setSelectedVessel}
+        onBoundsChange={setMapBounds}
+      />
 
-      <main className="dashboard">
-        <section className="hero-card panel">
-          <div>
-            <p className="eyebrow">Harbor Flow</p>
-            <h1>Volg schepen, ETA&apos;s en aankomstdrukte in een logistiek overzicht.</h1>
-            <p className="hero-copy">
-              Deze MVP is klaar om uit te bouwen naar een echte boat tracking app met AIS- of port-data.
-              Voor nu zie je hoe planning, vertragingen en aankomsten samenkomen in één scherm.
-            </p>
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <h1>Harbor Flow</h1>
+          <p className="subtitle">Live scheepstracker · AIS-data</p>
+        </div>
+
+        {loading && vessels.length === 0 ? (
+          <div className="loading-message">
+            <div className="spinner" />
+            <p>Scheepsdata ophalen...</p>
           </div>
-
-          <div className="hero-highlight">
-            <span className="hero-label">Eerstvolgende aankomst</span>
-            <strong>{nextArrival.name}</strong>
-            <span>{nextArrival.destination}</span>
-            <span>{formatDateTime(nextArrival.eta)}</span>
-            <span className="hero-chip">{formatRelative(nextArrival.eta)}</span>
+        ) : error && vessels.length === 0 ? (
+          <div className="error-message">
+            <p>{error}</p>
+            <button className="retry-btn" onClick={loadData}>Opnieuw proberen</button>
           </div>
-        </section>
+        ) : selectedVessel ? (
+          <VesselDetail vessel={selectedVessel} onBack={() => setSelectedVessel(null)} />
+        ) : (
+          <>
+            <input
+              className="search-input"
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Zoek op naam, MMSI of bestemming"
+            />
 
-        <section className="stats-grid">
-          <article className="panel stat-card">
-            <span className="stat-label">Schepen onderweg</span>
-            <strong>{activeVoyages}</strong>
-            <p>Actieve routes richting havens in NL en BE.</p>
-          </article>
-          <article className="panel stat-card">
-            <span className="stat-label">Vertragingen</span>
-            <strong>{delayedVoyages}</strong>
-            <p>Schepen met meer dan 30 minuten afwijking.</p>
-          </article>
-          <article className="panel stat-card">
-            <span className="stat-label">Aangemeerd</span>
-            <strong>{berthedVoyages}</strong>
-            <p>Schepen die nu aan de kade liggen.</p>
-          </article>
-          <article className="panel stat-card accent-card">
-            <span className="stat-label">Gem. ETA-afwijking</span>
-            <strong>{averageDelay} min</strong>
-            <p>Handig voor capaciteits- en ploegplanning.</p>
-          </article>
-        </section>
-
-        <section className="content-grid">
-          <div className="panel table-panel">
-            <div className="section-header">
-              <div>
-                <p className="section-kicker">Aankomstplanning</p>
-                <h2>Operationeel overzicht</h2>
+            <div className="stats-grid">
+              <div className="stat-card">
+                <span className="stat-label">In beeld</span>
+                <strong>{totalVisible}</strong>
               </div>
-
-              <div className="toolbar">
-                <input
-                  className="search-input"
-                  type="search"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Zoek op schip, haven of lading"
-                />
-                <select
-                  className="filter-select"
-                  value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value)}
-                >
-                  <option>Alle</option>
-                  <option>Onderweg</option>
-                  <option>Vertraagd</option>
-                  <option>Aangemeerd</option>
-                  <option>Voor anker</option>
-                </select>
+              <div className="stat-card">
+                <span className="stat-label">Varend</span>
+                <strong>{underway}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">Voor anker</span>
+                <strong>{anchored}</strong>
+              </div>
+              <div className="stat-card">
+                <span className="stat-label">Aangemeerd</span>
+                <strong>{moored}</strong>
               </div>
             </div>
 
             <div className="vessel-list">
-              {filteredVessels.map((vessel) => (
-                <article className="vessel-row" key={vessel.id}>
-                  <div className="vessel-primary">
-                    <div>
-                      <h3>{vessel.name}</h3>
-                      <p>
-                        {vessel.origin} naar {vessel.destination}
-                      </p>
-                    </div>
-                    <span className={`status-badge ${statusTone[vessel.status]}`}>{vessel.status}</span>
+              {listVessels.map((v) => (
+                <button
+                  key={v.mmsi}
+                  className="vessel-item"
+                  onClick={() => setSelectedVessel(v)}
+                >
+                  <div className="vessel-item-top">
+                    <strong>{v.name}</strong>
+                    <span
+                      className="nav-badge-sm"
+                      style={{ background: getNavColor(v.navStat) + '22', color: getNavColor(v.navStat) }}
+                    >
+                      {getNavLabel(v.navStat)}
+                    </span>
                   </div>
-
-                  <div className="vessel-meta">
-                    <div>
-                      <span className="meta-label">ETA</span>
-                      <strong>{formatDateTime(vessel.eta)}</strong>
-                    </div>
-                    <div>
-                      <span className="meta-label">Ligplaats</span>
-                      <strong>{vessel.berth}</strong>
-                    </div>
-                    <div>
-                      <span className="meta-label">Lading</span>
-                      <strong>{vessel.cargo}</strong>
-                    </div>
-                    <div>
-                      <span className="meta-label">Snelheid</span>
-                      <strong>{vessel.speedKnots} kn</strong>
-                    </div>
+                  <div className="vessel-item-bottom">
+                    <span>→ {v.destination}</span>
+                    <span>{formatSpeed(v.sog)}</span>
                   </div>
-
-                  <div className="progress-block">
-                    <div className="progress-copy">
-                      <span>Routevoortgang</span>
-                      <strong>{vessel.progress}%</strong>
-                    </div>
-                    <div className="progress-track">
-                      <div className="progress-fill" style={{ width: `${vessel.progress}%` }} />
-                    </div>
-                    <p className="delay-copy">
-                      {vessel.delayMinutes > 0
-                        ? `${vessel.delayMinutes} min afwijking op schema`
-                        : 'Op schema'}
-                    </p>
-                  </div>
-                </article>
+                </button>
               ))}
+              {visibleVessels.length > 200 && (
+                <p className="more-note">
+                  + {visibleVessels.length - 200} meer — zoom in of gebruik zoeken
+                </p>
+              )}
             </div>
+          </>
+        )}
+
+        {lastUpdate && (
+          <div className="last-update">
+            Bijgewerkt: {lastUpdate.toLocaleTimeString('nl-NL')}
           </div>
-
-          <aside className="side-column">
-            <div className="panel timeline-panel">
-              <p className="section-kicker">Komende vensters</p>
-              <h2>ETA timeline</h2>
-              <div className="timeline-list">
-                {filteredVessels.slice(0, 4).map((vessel) => (
-                  <div className="timeline-item" key={vessel.id}>
-                    <span className="timeline-dot" />
-                    <div>
-                      <strong>{formatDateTime(vessel.eta)}</strong>
-                      <p>{vessel.name}</p>
-                      <span>
-                        {vessel.destination} · {formatRelative(vessel.eta)}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="panel insight-panel">
-              <p className="section-kicker">Volgende stap</p>
-              <h2>Klaar voor echte data</h2>
-              <ul>
-                <li>Koppel AIS- of haven-API data aan deze lijstweergave.</li>
-                <li>Voeg waarschuwingen toe bij vertragingen of gewijzigde ligplaatsen.</li>
-                <li>Bouw daarna filters per terminal, klant of routecorridor uit.</li>
-              </ul>
-            </div>
-          </aside>
-        </section>
-      </main>
+        )}
+      </aside>
     </div>
   );
 }
-
-export default App;
