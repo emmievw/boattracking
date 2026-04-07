@@ -73,7 +73,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="sidebar-header">
           <h1>Harbor Flow</h1>
-          <p className="subtitle">Live scheepstracker · AIS-data</p>
+          <p className="subtitle">Bulkschepen richting Nederland · Live AIS</p>
         </div>
 
         {loading && vessels.length === 0 ? (

@@ -1,6 +1,14 @@
 const LOCATIONS_URL = 'https://meri.digitraffic.fi/api/ais/v1/locations';
 const VESSELS_URL = 'https://meri.digitraffic.fi/api/ais/v1/vessels';
 
+const NL_PORTS = [
+  'ROTTERDAM', 'AMSTERDAM', 'IJMUIDEN', 'VLISSINGEN', 'TERNEUZEN',
+  'DORDRECHT', 'MOERDIJK', 'EUROPOORT', 'MAASVLAKTE', 'EEMSHAVEN',
+  'DELFZIJL', 'HARLINGEN', 'DEN HELDER', 'SCHIEDAM', 'BOTLEK',
+  'PERNIS', 'HOOK OF HOLLAND', 'HOEK VAN HOLLAND', 'NLRTM', 'NLAMS',
+  'NLVLI', 'NLTNZ', 'NLEEM', 'NLIJM', 'NETHERLANDS',
+];
+
 const NAV_STATUS = {
   0: 'Varend (motor)',
   1: 'Voor anker',
@@ -106,6 +114,14 @@ export async function fetchAllData() {
     if (lat < -90 || lat > 90 || lon < -180 || lon > 180) continue;
 
     const meta = metaMap.get(props.mmsi) || {};
+
+    // Alleen vrachtschepen (70-79 = cargo / bulk)
+    const type = meta.shipType;
+    if (type == null || type < 70 || type > 79) continue;
+
+    // Alleen bestemming Nederland
+    const dest = (meta.destination || '').toUpperCase();
+    if (!dest || !NL_PORTS.some((port) => dest.includes(port))) continue;
 
     vessels.push({
       mmsi: props.mmsi,

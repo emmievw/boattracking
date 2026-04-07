@@ -34,8 +34,8 @@ function FlyTo({ vessel }) {
 export default function VesselMap({ vessels, selectedVessel, onSelectVessel, onBoundsChange }) {
   return (
     <MapContainer
-      center={[60.2, 24.9]}
-      zoom={7}
+      center={[54.0, 8.0]}
+      zoom={5}
       className="vessel-map"
       preferCanvas={true}
       zoomControl={false}
